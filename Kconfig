@@ -1,0 +1,8 @@
+mainmenu "APP"
+
+source "Kconfig.zephyr"
+config APP_ADC_DMA
+	default y
+	bool
+	select USE_STM32_LL_ADC
+	select USE_STM32_LL_DMA
