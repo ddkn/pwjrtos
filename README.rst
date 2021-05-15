@@ -1,109 +1,79 @@
-.. _button-sample:
+.. _pwjstrainlogger:
 
-Button
+PWJ Strain Logger
 ######
+
+**NB** *code-blocks::* do not render online on Github read this file locally.
 
 Overview
 ********
 
-A simple button demo showcasing the use of GPIO input with interrupts.
-The sample prints a message to the console each time a button is pressed.
+This is a `Zephyr RTOS https://www.zephyrproject.org/` project that utilizes a
+RTOS to measure the stress/strain exhibited by a Pulse Water Jet (PWJ). It does
+this by reading a straingauge that goes to a wheatstone bridge then is filtered
+and into a STM32F767 microcrontoller. It utilizes the DMA controller to read
+off of the ADC and store to a microSD as fast as possible since the PWJ
+operates at 20 kHz or 40 kHz. The accompanying daughter board to the Nucleo
+STM32F767ZI is located in the repository
+`Nanomagnetics Lab https://github.com/nanomagneticslab`.
+
+Installation
+************
+
+Please see the `Zephyr Getting Started Guide https://docs.zephyrproject.org/latest/getting_started/index.html`
+to set up the build system. For brevity I will include the basic steps.
+
+.. code-block:: console
+    pip install west
+    west init ~/pwjproject
+    west update
+    west zephyr-export
+    pip3 install -r ~/pwjproject/zephyr/scripts/requirements
+
+You need to setup an embedded toolchain. `gcc-arm-none-eabi` was used here. It
+can be installed via,
+
+.. code-block:: console
+    sudo apt install gcc-arm-none-eabi    # Debian/Ubuntu
+    sudo dnf install arm-none-eabi-newlib # Fedora/Redhat
+    sudo port install arm-none-eabi-gcc   # macOS by MacPorts
+
+Then you need to add the following *aliases* to your shells rc file,
+
+.. code-block:: bash
+    alias ZEPHYR_TOOLCHAIN_VARIANT=cross-compile
+    alias CROSS_COMPILE=/usr/local/bin/arm-none-eabi- # macOS via MacPorts
+    alias CROSS_COMPILE=/usr/bin/arm-none-eabi-       # Linux
+
+You should be able to build the blinky example to ensure everything works.
+
+.. code-block:: console
+    cd ~/pwjstrainlogger/zephyr
+    west build -p auto -b <your-board-name> samples/basic/blinky
 
 Requirements
 ************
 
-The board hardware must have a push button connected via a GPIO pin. These are
-called "User buttons" on many of Zephyr's :ref:`boards`.
-
-The button must be configured using the ``sw0`` :ref:`devicetree <dt-guide>`
-alias, usually in the :ref:`BOARD.dts file <devicetree-in-out-files>`. You will
-see this error if you try to build this sample for an unsupported board:
-
-.. code-block:: none
-
-   Unsupported board: sw0 devicetree alias is not defined
-
-You may see additional build errors if the ``sw0`` alias exists, but is not
-properly defined.
-
-The sample additionally supports an optional ``led0`` devicetree alias. This is
-the same alias used by the :ref:`blinky-sample`. If this is provided, the LED
-will be turned on when the button is pressed, and turned off off when it is
-released.
+You are required to have the PWJStrainLogger daughter board which includes a
+microSD card reader.
 
 Devicetree details
 ==================
 
-This section provides more details on devicetree configuration.
-
-Here is a minimal devicetree fragment which supports this sample. This only
-includes a ``sw0`` alias; the optional ``led0`` alias is left out for
-simplicity.
-
-.. code-block:: DTS
-
-   / {
-   	aliases {
-   		sw0 = &button0;
-   	};
-
-   	soc {
-   		gpio0: gpio@... {
-   			status = "okay";
-   			gpio-controller;
-   			#gpio-cells = <2>;
-   			/* ... */
-   		};
-   	};
-
-   	buttons {
-   		compatible = "gpio-keys";
-   		button0: button_0 {
-   			gpios = < &gpio0 PIN FLAGS >;
-   			label = "User button";
-   		};
-   		/* ... other buttons ... */
-   	};
-   };
-
-As shown, the ``sw0`` devicetree alias must point to a child node of a node
-with a "gpio-keys" :ref:`compatible <dt-important-props>`.
-
-The above situation is for the common case where:
-
-- ``gpio0`` is an example node label referring to a GPIO controller
--  ``PIN`` should be a pin number, like ``8`` or ``0``
-- ``FLAGS`` should be a logical OR of :ref:`GPIO configuration flags <gpio_api>`
-  meant to apply to the button, such as ``(GPIO_PULL_UP | GPIO_ACTIVE_LOW)``
-
-This assumes the common case, where ``#gpio-cells = <2>`` in the ``gpio0``
-node, and that the GPIO controller's devicetree binding names those two cells
-"pin" and "flags" like so:
-
-.. code-block:: yaml
-
-   gpio-cells:
-     - pin
-     - flags
-
-This sample requires a ``pin`` cell in the ``gpios`` property. The ``flags``
-cell is optional, however, and the sample still works if the GPIO cells
-do not contain ``flags``.
+The device tree is very bassic as we will only need two buttons to interface with.
+The ADC is designed to run manually outside of the Zephyr RTOS API because of the
+lack of continuous mode throught the DMA channel. As shown, the ``sw0`` devicetree
+alias must point to a child node of a node
 
 Building and Running
 ********************
 
-This sample can be built for multiple boards, in this example we will build it
-for the nucleo_f103rb board:
+This sample can be built for the Nucleo STM32F767ZI in this example we will
+build it for the nucleo_f767zi board:
 
 .. zephyr-app-commands::
-   :zephyr-app: samples/basic/button
-   :board: nucleo_f103rb
+   :zephyr-app: pwjstrainlogger
+   :board: nucleo_767zi
    :goals: build
    :compact:
 
-After startup, the program looks up a predefined GPIO device, and configures the
-pin in input mode, enabling interrupt generation on falling edge. During each
-iteration of the main loop, the state of GPIO line is monitored and printed to
-the serial console. When the input button gets pressed, the interrupt handler
-will print an information about this event along with its timestamp.
