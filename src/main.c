@@ -10,6 +10,12 @@
 #include <drivers/gpio.h>
 #include <sys/util.h>
 #include <sys/printk.h>
+
+#include <disk/disk_access.h>
+#include <logging/log.h>
+#include <fs/fs.h>
+#include <ff.h>
+
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -56,6 +62,22 @@ enum leds_available {POWER, STATUS};
 #define SW0_GPIO_PIN	0
 #define SW0_GPIO_FLAGS	0
 #endif
+
+/* SD card related definitions */
+#define FS_END_OF_DIR	0
+
+LOG_MODULE_REGISTER(main);
+
+static int sd_ls(const char *path);
+
+static FATFS fat_fs;
+static struct fs_mount_t sdroot = {
+	.type = FS_FATFS,
+	.fs_data = &fat_fs,
+};
+
+/* NB fatfs able to mount only strings inside _VOLUME_STRS in ffconf.h */
+static const char *disk_mount_pt = "/sd:";
 
 /* My garbage */
 //#define BUFFER_SIZE 10
@@ -120,12 +142,12 @@ static inline void _adc_post_init()
 	//ADC1->CR2 = (0 << ADC_CR2_EXTEN_Pos);
 	/* External trigger on Timer2 TRGO */
 	//ADC1->CR2 = (0b1011 << ADC_CR2_EXTSEL_Pos) | (0x1 << ADC_CR2_EXTEN_Pos);
-	/* One sequence implying a single conversion */ 
+	/* One sequence implying a single conversion */
 	ADC1->SQR1 = (0x0 << ADC_SQR1_L_Pos);
 	/* Put ADC1 Channel 3 on Sequence 1 */
 	ADC1->SQR3 = (0x3 << ADC_SQR3_SQ1_Pos);
 	/* Sample time 15 cycles on ADC1 PA3 */
-	ADC1->SMPR2 = (ADC_SMPR2_SMP3_1 | ADC_SMPR2_SMP3_0); 
+	ADC1->SMPR2 = (ADC_SMPR2_SMP3_1 | ADC_SMPR2_SMP3_0);
 	/* For DMA enable multplie conversions */
 	ADC1->CR1 |= ADC_CR1_SCAN;
 	//ADC1->CR2 |= ADC_CR2_DDS;
@@ -162,7 +184,7 @@ static inline void _dma_init()
 	DMA2_Stream0->NDTR = 1;
 
 	/* XXX Zephyr style IRQ */
-	IRQ_CONNECT(DMA2_Stream0_IRQn, PRIORITY_DMA, 
+	IRQ_CONNECT(DMA2_Stream0_IRQn, PRIORITY_DMA,
 		    DMA2_Stream0_IRQHandler, 0, 0);
 	irq_enable(DMA2_Stream0_IRQn);
 
@@ -309,12 +331,93 @@ void main(void)
 			//printk("test_src\tDMA+ADC\n");
 			//arch_dcache_all(K_CACHE_INVD);
 			//for (int i = 0; i < MY_MAX_SIZE; i++) {
-			//	printk("%x\t\t%x\n", 
+			//	printk("%x\t\t%x\n",
 			//		(uint32_t)test_src[i],
-			//		(uint32_t)dma_adc_sample[i]); 
+			//		(uint32_t)dma_adc_sample[i]);
 			//}
 		}
 	}
+}
+
+static void sd_init()
+{
+	static const char *disk_pdrv = "sd";
+	uint64_t memory_size_mb;
+	uint32_t block_count;
+	uint32_t block_size;
+
+	/* do { ... } while (0); required for multiline macros, i.e., LOG_* */
+	do {
+		if (disk_access_init(disk_pdrv) != 0) {
+			LOG_ERR("SD: Initialization error!");
+			break;
+		}
+
+		if (disk_access_ioctl(disk_pdrv, DISK_IOCTL_GET_SECTOR_COUNT,
+			&block_count)) {
+			LOG_ERR("SD: Unable to get sector count");
+			break;
+		}
+		LOG_INF("Block count %u", block_count);
+
+		if (disk_access_ioctl(disk_pdrv, DISK_IOCTL_GET_SECTOR_SIZE, &block_size)) {
+			LOG_ERR("SD: Unable to get sector size");
+			break
+		}
+		printk("Sector size %u\n", block_size);
+
+		memory_size = (uint64_t)block_count * block_size;
+		/*
+		 * >> 10 is the same as divide by 1000 but faster
+		 * >> 20 is the same as divide by 1000*1000 or 1000000
+		 */
+		printk("Memory Size is %u MB\n", (uint32_t)(memory_size >> 20));
+	} while (0);
+
+	sdroot.mnt_point = disk_mount_pt;
+
+	int status = fs_mount(&mp);
+
+	if (status == FR_OK) {
+		printk("microSD disk mounted.\n");
+		/* List contents of microSD for debug output */
+		sd_ls(disk_mount_pt);
+	} else {
+		printk("Error mounting microSD disk.\n");
+	}
+}
+
+static int sd_ls(const char *path)
+{
+	int status;
+	struct fs_dir_t dirp;
+	static struct fs_dirent entry;
+
+	fs_dir_t_init(&dirp);
+
+	status = fs_opendir(&dirp, path);
+	if (status) {
+		printk("Error opening dir %s [E:%d]\n", path, status);
+		return status;
+	}
+
+	printk("\nDirectory %s contents:\n", path);
+	for (;;) {
+		status = fs_readdir(&dirp, &entry);
+		if (status || entry.name[0] == FS_END_OF_DIR) {
+			break;
+		}
+
+		if (entry.type == FS_DIR_ENTRY_DIR) {
+			printk("[DIR ] %s\n", entry.name);
+		} else {
+			printk("[FILE] %s (size = %zu)\n", entry.name, entry.size);
+		}
+	}
+
+	fs_closedir(&dirp);
+
+	return status;
 }
 
 /*
