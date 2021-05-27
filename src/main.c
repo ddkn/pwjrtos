@@ -68,6 +68,7 @@ enum leds_available {POWER, STATUS};
 
 LOG_MODULE_REGISTER(main);
 
+static void sd_init(void);
 static int sd_ls(const char *path);
 
 static FATFS fat_fs;
@@ -309,6 +310,9 @@ void main(void)
 	printk("DMA2_Stream0->FCR  : 0x%08x\n", DMA2_Stream0->FCR);
 
 	printk("PWJ Strain Logger Ready\n");
+
+	sd_init();
+
 	gpio_pin_set(led_power, LED_PWR_GPIO_PIN, 1);
 	while (1) {
 		match_led_to_button(button, led_status);
@@ -339,7 +343,7 @@ void main(void)
 	}
 }
 
-static void sd_init()
+static void sd_init(void)
 {
 	static const char *disk_pdrv = "sd";
 	uint64_t memory_size_mb;
@@ -362,21 +366,21 @@ static void sd_init()
 
 		if (disk_access_ioctl(disk_pdrv, DISK_IOCTL_GET_SECTOR_SIZE, &block_size)) {
 			LOG_ERR("SD: Unable to get sector size");
-			break
+			break;
 		}
 		printk("Sector size %u\n", block_size);
 
-		memory_size = (uint64_t)block_count * block_size;
+		memory_size_mb = (uint64_t)block_count * block_size;
 		/*
 		 * >> 10 is the same as divide by 1000 but faster
 		 * >> 20 is the same as divide by 1000*1000 or 1000000
 		 */
-		printk("Memory Size is %u MB\n", (uint32_t)(memory_size >> 20));
+		printk("Memory Size is %u MB\n", (uint32_t)(memory_size_mb >> 20));
 	} while (0);
 
 	sdroot.mnt_point = disk_mount_pt;
 
-	int status = fs_mount(&mp);
+	int status = fs_mount(&sdroot);
 
 	if (status == FR_OK) {
 		printk("microSD disk mounted.\n");
