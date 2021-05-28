@@ -69,16 +69,17 @@ enum leds_available {POWER, STATUS};
 LOG_MODULE_REGISTER(main);
 
 static void sd_init(void);
+static int sd_io_test(const char *path);
 static int sd_ls(const char *path);
 
 static FATFS fat_fs;
-static struct fs_mount_t sdroot = {
+static struct fs_mount_t mp = {
 	.type = FS_FATFS,
 	.fs_data = &fat_fs,
 };
 
 /* NB fatfs able to mount only strings inside _VOLUME_STRS in ffconf.h */
-static const char *disk_mount_pt = "/sd:";
+static const char *disk_mount_pt = "/SD:";
 
 /* My garbage */
 //#define BUFFER_SIZE 10
@@ -106,12 +107,12 @@ static void DMA2_Stream0_IRQHandler(void *args)
 		DMA2->LIFCR |= DMA_LIFCR_CTCIF0;
 		dma_complete = true;
 	}
-	
+
 	if (DMA2->LISR & DMA_LISR_TEIF0) {
 		DMA2->LIFCR |= DMA_LIFCR_CTEIF0;
 		dma_error = true;
 	}
-	
+
 }
 
 static inline void _gpio_init()
@@ -282,7 +283,7 @@ void main(void)
 	}
 
 	printk("Set up STATUS LED at %s pin %d\n", LED_STATUS_GPIO_LABEL, LED_STATUS_GPIO_PIN);
-	
+
 	led_power = device_get_binding(LED_PWR_GPIO_LABEL);
 	if (led_power == NULL) {
 		printk("Didn't find POWER LED device %s\n", LED_PWR_GPIO_LABEL);
@@ -345,7 +346,7 @@ void main(void)
 
 static void sd_init(void)
 {
-	static const char *disk_pdrv = "sd";
+	static const char *disk_pdrv = "SD";
 	uint64_t memory_size_mb;
 	uint32_t block_count;
 	uint32_t block_size;
@@ -378,17 +379,54 @@ static void sd_init(void)
 		printk("Memory Size is %u MB\n", (uint32_t)(memory_size_mb >> 20));
 	} while (0);
 
-	sdroot.mnt_point = disk_mount_pt;
+	mp.mnt_point = disk_mount_pt;
 
-	int status = fs_mount(&sdroot);
+	int status = fs_mount(&mp);
 
 	if (status == FR_OK) {
 		printk("microSD disk mounted.\n");
 		/* List contents of microSD for debug output */
 		sd_ls(disk_mount_pt);
+		sd_io_test("/SD:/HELLO.TXT");
 	} else {
 		printk("Error mounting microSD disk.\n");
 	}
+}
+
+static int sd_io_test(const char *path)
+{
+	int status;
+	int bytes;
+	const char *ofile = "/SD:/bye.txt";
+	struct fs_file_t fp;
+	char line[100];
+
+	fs_file_t_init(&fp);
+
+	status = fs_open(&fp, path, FS_O_READ);
+	if (status < 0) {
+		printk("Error opening %s [E:%d]\n", path, status);
+		return status;
+	}
+
+	printk("Opening %s\n", path);
+	bytes = fs_read(&fp, line, 12);
+	printk("fp [%i]: %s\n", bytes, line);
+
+	fs_close(&fp);
+
+	fs_file_t_init(&fp);
+	status = fs_open(&fp, ofile, FS_O_CREATE | FS_O_WRITE);
+	if (status < 0) {
+		printk("Error opening %s [E:%d]\n", ofile, status);
+		return status;
+	}
+	memset(line, 0, sizeof(line));
+	bytes = fs_write(&fp, "Goodbye.", 8);
+	printk("Wrote %i chars to %s\n", bytes, ofile);
+	fs_close(&fp);
+
+	return status;
 }
 
 static int sd_ls(const char *path)
@@ -447,7 +485,7 @@ static int sd_ls(const char *path)
 	}
 
 	printk("Set up STATUS LED at %s pin %d\n", LED_STATUS_GPIO_LABEL, LED_STATUS_GPIO_PIN);
-	
+
 	led[POWER] = device_get_binding(LED_PWR_GPIO_LABEL);
 	if (led == NULL) {
 		printk("Didn't find POWER LED device %s\n", LED_PWR_GPIO_LABEL);
