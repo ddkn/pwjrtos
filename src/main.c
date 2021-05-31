@@ -2,6 +2,8 @@
  * Copyright (c) 2020 David Kalliecharan <david@david.science>
  */
 
+#include "sd.h"
+
 #include <soc.h>
 #include <stm32_ll_adc.h>
 #include <stm32_ll_dma.h>
@@ -64,32 +66,21 @@ enum leds_available {POWER, STATUS};
 #endif
 
 /* SD card related definitions */
-#define FS_END_OF_DIR	0
-
 LOG_MODULE_REGISTER(main);
 
-static void sd_init(void);
-static int sd_io_test(const char *path);
-static int sd_ls(const char *path);
+/* LED helpers, which use the led0 devicetree alias if it's available. */
+//static const struct device *initialize_led(const struct device *led[LED_NUM]);
+static void match_led_to_button(const struct device *button,
+				const struct device *led);
 
-static FATFS fat_fs;
-static struct fs_mount_t mp = {
-	.type = FS_FATFS,
-	.fs_data = &fat_fs,
-};
-
-/* NB fatfs able to mount only strings inside _VOLUME_STRS in ffconf.h */
-static const char *disk_mount_pt = "/SD:";
-
-/* My garbage */
-//#define BUFFER_SIZE 10
+static struct gpio_callback button_cb_data;
 
 static volatile uint16_t dma_adc_sample;
-
 static volatile bool dma_complete = false;
 static volatile bool dma_error = false;
 
-static void start_dma_adc(void)
+static void
+start_dma_adc(void)
 {
 	/* Required for SWSTART */
 	ADC1->CR2 |= ADC_CR2_ADON;
@@ -101,7 +92,8 @@ static void start_dma_adc(void)
 	ADC1->CR2 |= ADC_CR2_SWSTART;
 }
 
-static void DMA2_Stream0_IRQHandler(void *args)
+static void
+DMA2_Stream0_IRQHandler(void *args)
 {
 	if (DMA2->LISR & DMA_LISR_TCIF0) {
 		DMA2->LIFCR |= DMA_LIFCR_CTCIF0;
@@ -112,17 +104,18 @@ static void DMA2_Stream0_IRQHandler(void *args)
 		DMA2->LIFCR |= DMA_LIFCR_CTEIF0;
 		dma_error = true;
 	}
-
 }
 
-static inline void _gpio_init()
+static inline
+void _gpio_init()
 {
 	/* Enable GPIOA PA0 as analog */
 	GPIOA->MODER |= (GPIO_MODER_MODER3_0 | GPIO_MODER_MODER3_1);
 	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
 }
 
-static inline void _adc_pre_init()
+static inline
+void _adc_pre_init()
 {
 	volatile uint32_t tmpreg;
 
@@ -138,7 +131,8 @@ static inline void _adc_pre_init()
 	ADC1->CR2 &= ~ADC_CR2_CONT;
 }
 
-static inline void _adc_post_init()
+static inline void
+_adc_post_init()
 {
 	/* No external trigger */
 	//ADC1->CR2 = (0 << ADC_CR2_EXTEN_Pos);
@@ -155,7 +149,8 @@ static inline void _adc_post_init()
 	//ADC1->CR2 |= ADC_CR2_DDS;
 }
 
-static inline void _dma_init()
+static inline void
+_dma_init()
 {
 	/* Goal select DMA2 to use ADC1 on stream 0 channel 0 */
 
@@ -209,22 +204,17 @@ static inline void _dma_init()
 	DMA2_Stream0->CR |= DMA_SxCR_EN;
 }
 
-/* LED helpers, which use the led0 devicetree alias if it's available. */
-//static const struct device *initialize_led(const struct device *led[LED_NUM]);
-static void match_led_to_button(const struct device *button,
-				const struct device *led);
-
-static struct gpio_callback button_cb_data;
-
-void button_pressed(const struct device *dev, struct gpio_callback *cb,
-		    uint32_t pins)
+void
+button_pressed(const struct device *dev, struct gpio_callback *cb,
+	uint32_t pins)
 {
 	printk("Button pressed at %" PRIu32 "\n", k_cycle_get_32());
 	//printk("ADC: 0x%04x\n", poll_adc());
 	start_dma_adc();
 }
 
-void main(void)
+void
+main(void)
 {
 	/* Required for STM32F767, breaks DCache breaks DMA on Zephyr */
 	 SCB_DisableDCache();
@@ -275,14 +265,16 @@ void main(void)
 		return;
 	}
 
-	ret = gpio_pin_configure(led_status, LED_STATUS_GPIO_PIN, LED_STATUS_GPIO_FLAGS);
+	ret = gpio_pin_configure(led_status, LED_STATUS_GPIO_PIN,
+				 LED_STATUS_GPIO_FLAGS);
 	if (ret != 0) {
 		printk("Error %d: failed to configure STATUS LED device %s pin %d\n",
 		       ret, LED_STATUS_GPIO_LABEL, LED_STATUS_GPIO_PIN);
 		return;
 	}
 
-	printk("Set up STATUS LED at %s pin %d\n", LED_STATUS_GPIO_LABEL, LED_STATUS_GPIO_PIN);
+	printk("Set up STATUS LED at %s pin %d\n",
+	       LED_STATUS_GPIO_LABEL, LED_STATUS_GPIO_PIN);
 
 	led_power = device_get_binding(LED_PWR_GPIO_LABEL);
 	if (led_power == NULL) {
@@ -298,19 +290,19 @@ void main(void)
 	}
 
 	printk("Set up POWER at %s pin %d\n", LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
-
-	printk("Press the button\n");
-	printk("RCC->CR            : 0x%08x\n", RCC->CR);
-	printk("RCC->CFGR          : 0x%08x\n", RCC->CFGR);
-	printk("RCC->PLLCFGR       : 0x%08x\n", RCC->PLLCFGR);
-	printk("RCC->AHB1ENR       : 0x%08x\n", RCC->AHB1ENR);
-	printk("DMA2_Stream0->CR   : 0x%08x\n", DMA2_Stream0->CR);
-	printk("DMA2_Stream0->NDTR : 0x%08x\n", DMA2_Stream0->NDTR);
-	printk("DMA2_Stream0->PAR  : 0x%08x\n", DMA2_Stream0->PAR);
-	printk("DMA2_Stream0->MOAR : 0x%08x\n", DMA2_Stream0->M0AR);
-	printk("DMA2_Stream0->FCR  : 0x%08x\n", DMA2_Stream0->FCR);
+	printk("Registers check\n");
+	printk("  RCC->CR            : 0x%08x\n", RCC->CR);
+	printk("  RCC->CFGR          : 0x%08x\n", RCC->CFGR);
+	printk("  RCC->PLLCFGR       : 0x%08x\n", RCC->PLLCFGR);
+	printk("  RCC->AHB1ENR       : 0x%08x\n", RCC->AHB1ENR);
+	printk("  DMA2_Stream0->CR   : 0x%08x\n", DMA2_Stream0->CR);
+	printk("  DMA2_Stream0->NDTR : 0x%08x\n", DMA2_Stream0->NDTR);
+	printk("  DMA2_Stream0->PAR  : 0x%08x\n", DMA2_Stream0->PAR);
+	printk("  DMA2_Stream0->MOAR : 0x%08x\n", DMA2_Stream0->M0AR);
+	printk("  DMA2_Stream0->FCR  : 0x%08x\n", DMA2_Stream0->FCR);
 
 	printk("PWJ Strain Logger Ready\n");
+	printk("Press the button\n");
 
 	sd_init();
 
@@ -344,167 +336,13 @@ void main(void)
 	}
 }
 
-static void sd_init(void)
-{
-	static const char *disk_pdrv = "SD";
-	uint64_t memory_size_mb;
-	uint32_t block_count;
-	uint32_t block_size;
-
-	/* do { ... } while (0); required for multiline macros, i.e., LOG_* */
-	do {
-		if (disk_access_init(disk_pdrv) != 0) {
-			LOG_ERR("SD: Initialization error!");
-			break;
-		}
-
-		if (disk_access_ioctl(disk_pdrv, DISK_IOCTL_GET_SECTOR_COUNT,
-			&block_count)) {
-			LOG_ERR("SD: Unable to get sector count");
-			break;
-		}
-		LOG_INF("Block count %u", block_count);
-
-		if (disk_access_ioctl(disk_pdrv, DISK_IOCTL_GET_SECTOR_SIZE, &block_size)) {
-			LOG_ERR("SD: Unable to get sector size");
-			break;
-		}
-		printk("Sector size %u\n", block_size);
-
-		memory_size_mb = (uint64_t)block_count * block_size;
-		/*
-		 * >> 10 is the same as divide by 1000 but faster
-		 * >> 20 is the same as divide by 1000*1000 or 1000000
-		 */
-		printk("Memory Size is %u MB\n", (uint32_t)(memory_size_mb >> 20));
-	} while (0);
-
-	mp.mnt_point = disk_mount_pt;
-
-	int status = fs_mount(&mp);
-
-	if (status == FR_OK) {
-		printk("microSD disk mounted.\n");
-		/* List contents of microSD for debug output */
-		sd_ls(disk_mount_pt);
-		sd_io_test("/SD:/HELLO.TXT");
-	} else {
-		printk("Error mounting microSD disk.\n");
-	}
-}
-
-static int sd_io_test(const char *path)
-{
-	int status;
-	int bytes;
-	const char *ofile = "/SD:/bye.txt";
-	struct fs_file_t fp;
-	char line[100];
-
-	fs_file_t_init(&fp);
-
-	status = fs_open(&fp, path, FS_O_READ);
-	if (status < 0) {
-		printk("Error opening %s [E:%d]\n", path, status);
-		return status;
-	}
-
-	printk("Opening %s\n", path);
-	bytes = fs_read(&fp, line, 12);
-	printk("fp [%i]: %s\n", bytes, line);
-
-	fs_close(&fp);
-
-	fs_file_t_init(&fp);
-	status = fs_open(&fp, ofile, FS_O_CREATE | FS_O_WRITE);
-	if (status < 0) {
-		printk("Error opening %s [E:%d]\n", ofile, status);
-		return status;
-	}
-	memset(line, 0, sizeof(line));
-	bytes = fs_write(&fp, "Goodbye.", 8);
-	printk("Wrote %i chars to %s\n", bytes, ofile);
-	fs_close(&fp);
-
-	return status;
-}
-
-static int sd_ls(const char *path)
-{
-	int status;
-	struct fs_dir_t dirp;
-	static struct fs_dirent entry;
-
-	fs_dir_t_init(&dirp);
-
-	status = fs_opendir(&dirp, path);
-	if (status) {
-		printk("Error opening dir %s [E:%d]\n", path, status);
-		return status;
-	}
-
-	printk("\nDirectory %s contents:\n", path);
-	for (;;) {
-		status = fs_readdir(&dirp, &entry);
-		if (status || entry.name[0] == FS_END_OF_DIR) {
-			break;
-		}
-
-		if (entry.type == FS_DIR_ENTRY_DIR) {
-			printk("[DIR ] %s\n", entry.name);
-		} else {
-			printk("[FILE] %s (size = %zu)\n", entry.name, entry.size);
-		}
-	}
-
-	fs_closedir(&dirp);
-
-	return status;
-}
-
 /*
  * The led0 devicetree alias is optional. If present, we'll use it
  * to turn on the LED whenever the button is pressed.
  */
 #ifdef LED_STATUS_GPIO_LABEL
-/*static const struct device *initialize_led(const struct device *led[LED_NUM])
-{
-	int ret;
-
-	led[STATUS] = device_get_binding(LED_STATUS_GPIO_LABEL);
-	if (led == NULL) {
-		printk("Didn't find STATUS LED device %s\n", LED_STATUS_GPIO_LABEL);
-		return NULL;
-	}
-
-	ret = gpio_pin_configure(led[STATUS], LED_STATUS_GPIO_PIN, LED_STATUS_GPIO_FLAGS);
-	if (ret != 0) {
-		printk("Error %d: failed to configure STATUS LED device %s pin %d\n",
-		       ret, LED_STATUS_GPIO_LABEL, LED_STATUS_GPIO_PIN);
-		return NULL;
-	}
-
-	printk("Set up STATUS LED at %s pin %d\n", LED_STATUS_GPIO_LABEL, LED_STATUS_GPIO_PIN);
-
-	led[POWER] = device_get_binding(LED_PWR_GPIO_LABEL);
-	if (led == NULL) {
-		printk("Didn't find POWER LED device %s\n", LED_PWR_GPIO_LABEL);
-		return NULL;
-	}
-
-	ret = gpio_pin_configure(led[POWER], LED_PWR_GPIO_PIN, LED_PWR_GPIO_FLAGS);
-	if (ret != 0) {
-		printk("Error %d: failed to configure POWER LED device %s pin %d\n",
-		       ret, LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
-		return NULL;
-	}
-
-	printk("Set up POWER at %s pin %d\n", LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
-	return NULL;
-}*/
-
-static void match_led_to_button(const struct device *button,
-				const struct device *led)
+static void
+match_led_to_button(const struct device *button, const struct device *led)
 {
 	bool val;
 
@@ -512,17 +350,9 @@ static void match_led_to_button(const struct device *button,
 	gpio_pin_set(led, LED_STATUS_GPIO_PIN, val);
 }
 #else  /* !defined(LED_STATUS_GPIO_LABEL) */
-/*static const struct device *initialize_led(const struct device *led[LED_NUM])
-{
-	printk("No LED device was defined\n");
-	return NULL;
-}*/
-
-static void match_led_to_button(const struct device *button,
-				const struct device *led)
+static void
+match_led_to_button(const struct device *button, const struct device *led)
 {
 	return;
 }
 #endif	/* LED_STATUS_GPIO_LABEL */
-
-
