@@ -26,7 +26,12 @@
 
 /* My Priorities */
 //#define PRIORITY_ADC	0
-#define PRIORITY_DMA	0
+#define PRIORITY_DMA		0
+
+#define QUEUE_BUFFER_LEN	10
+
+#define SAMPLE_RATE_LOW		2
+#define SAMPLE_RATE_HIGH	2*SAMPLE_RATE_LOW
 
 /*
  * Get button configuration from the devicetree sw0 alias.
@@ -75,22 +80,16 @@ static void match_led_to_button(const struct device *button,
 
 static struct gpio_callback button_cb_data;
 
-static volatile uint16_t dma_adc_sample;
+static volatile uint16_t dma_adc_sample[QUEUE_BUFFER_LEN];
 static volatile bool dma_complete = false;
 static volatile bool dma_error = false;
 
-static void
-start_dma_adc(void)
-{
-	/* Required for SWSTART */
-	ADC1->CR2 |= ADC_CR2_ADON;
-	/* See Sect. 15.8.1 to restart ADC/DMA transfers */
-	ADC1->CR2 &= ~ADC_CR2_DMA;
-	ADC1->CR2 |= ADC_CR2_DMA;
-
-	/* Manually start ADC conversion */
-	ADC1->CR2 |= ADC_CR2_SWSTART;
-}
+enum timer_state_enum {
+	TIMER_DISABLED = 0,
+	TIMER_ENABLED = 1,
+	TIMER_SOFT_STOP,
+} timer_state = TIMER_DISABLED;
+static volatile uint32_t tim_reload;
 
 static void
 DMA2_Stream0_IRQHandler(void *args)
@@ -104,6 +103,13 @@ DMA2_Stream0_IRQHandler(void *args)
 		DMA2->LIFCR |= DMA_LIFCR_CTEIF0;
 		dma_error = true;
 	}
+
+	if (timer_state == TIMER_SOFT_STOP) {
+		TIM2->CR1 &= ~TIM_CR1_CEN;
+		ADC1->CR2 &= ~ADC_CR2_ADON;
+		timer_state = TIMER_DISABLED;
+		printk("TIM2 | Stopped\n");
+	}
 }
 
 static inline
@@ -114,30 +120,27 @@ void _gpio_init()
 	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
 }
 
-static inline
-void _adc_pre_init()
+static inline void
+_adc_pre_init(void)
 {
 	volatile uint32_t tmpreg;
 
-	/* Enable ADC 1 */
+	/* Enable ADC 1 peripheral clock, wait 2 clock cycles before read  */
 	RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
-	/* Required to wait the 2 clock cycles before reading */
 	tmpreg = (RCC->APB2ENR & RCC_APB2ENR_ADC1EN);
 	(void)tmpreg;
 
 	/* ADC prescaler set to 2 */
 	ADC123_COMMON->CCR &= (0x00 << ADC_CCR_ADCPRE_Pos);
 	/* Disable continous mode */
-	ADC1->CR2 &= ~ADC_CR2_CONT;
+	ADC1->CR2 |= ADC_CR2_CONT;
 }
 
 static inline void
-_adc_post_init()
+_adc_post_init(void)
 {
-	/* No external trigger */
-	//ADC1->CR2 = (0 << ADC_CR2_EXTEN_Pos);
 	/* External trigger on Timer2 TRGO */
-	//ADC1->CR2 = (0b1011 << ADC_CR2_EXTSEL_Pos) | (0x1 << ADC_CR2_EXTEN_Pos);
+	ADC1->CR2 = (0b1011 << ADC_CR2_EXTSEL_Pos) | (0x1 << ADC_CR2_EXTEN_Pos);
 	/* One sequence implying a single conversion */
 	ADC1->SQR1 = (0x0 << ADC_SQR1_L_Pos);
 	/* Put ADC1 Channel 3 on Sequence 1 */
@@ -146,11 +149,49 @@ _adc_post_init()
 	ADC1->SMPR2 = (ADC_SMPR2_SMP3_1 | ADC_SMPR2_SMP3_0);
 	/* For DMA enable multplie conversions */
 	ADC1->CR1 |= ADC_CR1_SCAN;
-	//ADC1->CR2 |= ADC_CR2_DDS;
+	/* Enable DMA transfers */
+	ADC1->CR2 |= ADC_CR2_DDS;
+	ADC1->CR2 |= ADC_CR2_DMA;
 }
 
 static inline void
-_dma_init()
+_timer_init(void)
+{
+	uint32_t tmpreg;
+	uint32_t apb1_ppre1 = (RCC->CFGR & RCC_CFGR_PPRE1) >> RCC_CFGR_PPRE1_Pos;
+	uint32_t tim_clk_freq = SystemCoreClock >> APBPrescTable[apb1_ppre1];
+	/* tim_clk_freq @ 36 MHz, for simplicity set timer update every 1 MHz  */
+	uint32_t tim_prescaler = 36;
+
+	printk("TIM | PPRE1 : 0x%02x\n", apb1_ppre1);
+	printk("TIM | CLK   : %i\n", tim_clk_freq);
+	if (apb1_ppre1 != RCC_CFGR_PPRE1_DIV1) {
+		tim_clk_freq *= 2;
+	}
+
+	/* Enable TIM2 peripheral clock, wait 2 clock cycles before read */
+	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+	tmpreg = RCC->APB1ENR & RCC_APB1ENR_TIM2EN;
+	(void)tmpreg;
+
+	/* TIM2 is a 32-bit timer, but prescaler is 16-bits wide
+	 * This implies timer range is tim_clk_freq/0xffff -> tim_clk_freq
+	 */
+	tim_reload = tim_clk_freq / (tim_prescaler * SAMPLE_RATE_LOW);
+	/* WARN Adjust register by -1 since they count from zero */
+	TIM2->PSC = tim_prescaler - 1;
+	TIM2->ARR = tim_reload - 1;
+
+	/* Upcounter, and edge aligned */
+	TIM2->CR1 &= ~(TIM_CR1_DIR & TIM_CR1_CMS);
+	/* Update event for trigger output TRGO */
+	TIM2->CR2 |= (0x2 << TIM_CR2_MMS_Pos);
+	/* Update generation, re-initialize the counter */
+	TIM2->EGR |= TIM_EGR_UG;
+}
+
+static inline void
+_dma_init(void)
 {
 	/* Goal select DMA2 to use ADC1 on stream 0 channel 0 */
 
@@ -168,17 +209,21 @@ _dma_init()
 	/* Reset assumes periph. to memory, perih. no inc., DMA controls flow */
 	const uint32_t cr = (DMA_SxCR_MINC 	| /* Memory inc. */
 			     //DMA_SxCR_PINC 	|
-			     DMA_SxCR_CIRC 	| /* Circular Buffer */
+			     DMA_SxCR_CIRC 		| /* Circular Buffer */
 			     DMA_SxCR_MSIZE_0 	| /* 16-bit */
 			     DMA_SxCR_PSIZE_0 	| /* 16-bit */
 			     DMA_SxCR_PL_1);	  /* Priority high */
 
 	/* Specify transfer addresses and size for ADC and data */
 	DMA2_Stream0->PAR = (uint32_t)&(ADC1->DR);
-	DMA2_Stream0->M0AR = (uint32_t)&dma_adc_sample;
+	DMA2_Stream0->M0AR = (uint32_t)dma_adc_sample;
 
-	/* Single byte transfer */
-	DMA2_Stream0->NDTR = 1;
+	/* Do not exceed DMA byte transfer limit */
+	if (QUEUE_BUFFER_LEN > 0xffff) {
+		DMA2_Stream0->NDTR = 0xffff;
+	} else {
+		DMA2_Stream0->NDTR = QUEUE_BUFFER_LEN;
+	}
 
 	/* XXX Zephyr style IRQ */
 	IRQ_CONNECT(DMA2_Stream0_IRQn, PRIORITY_DMA,
@@ -198,8 +243,6 @@ _dma_init()
 			DMA_HIFCR_CTCIF6 | DMA_HIFCR_CTEIF6 |
 			DMA_HIFCR_CTCIF7 | DMA_HIFCR_CTEIF7);
 	//DMA2_Stream0->FCR |= DMA_SxFCR_DMDIS;
-	printk("DMA2_Stream0->FCR  : 0x%08x\n", DMA2_Stream0->FCR);
-	printk("DMA2_Stream0->NDTR : 0x%08x\n", DMA2_Stream0->NDTR);
 	printk("Starting DMA\n");
 	DMA2_Stream0->CR |= DMA_SxCR_EN;
 }
@@ -208,9 +251,18 @@ void
 button_pressed(const struct device *dev, struct gpio_callback *cb,
 	uint32_t pins)
 {
-	printk("Button pressed at %" PRIu32 "\n", k_cycle_get_32());
-	//printk("ADC: 0x%04x\n", poll_adc());
-	start_dma_adc();
+	printk("[%" PRIu32 "] Button: Engaged\n", k_cycle_get_32());
+	/* Toggle TIM2 state */
+	if (timer_state == TIMER_DISABLED) {
+		TIM2->CR1 |= TIM_CR1_CEN;
+		/* Required for SWSTART */
+		ADC1->CR2 |= ADC_CR2_ADON;
+		timer_state = TIMER_ENABLED;
+		printk("TIM2 | Starting\n");
+	} else {
+		timer_state = TIMER_SOFT_STOP;
+		printk("TIM2 | Stopping\n");
+	}
 }
 
 void
@@ -221,6 +273,7 @@ main(void)
 
 	_gpio_init();
 	_adc_pre_init();
+	_timer_init();
 	_dma_init();
 	_adc_post_init();
 
@@ -228,8 +281,6 @@ main(void)
 	const struct device *led_status;
 	const struct device *led_power;
 	int ret;
-
-
 
 	button = device_get_binding(SW0_GPIO_LABEL);
 	if (button == NULL) {
@@ -256,8 +307,6 @@ main(void)
 	gpio_init_callback(&button_cb_data, button_pressed, BIT(SW0_GPIO_PIN));
 	gpio_add_callback(button, &button_cb_data);
 	printk("Set up button at %s pin %d\n", SW0_GPIO_LABEL, SW0_GPIO_PIN);
-
-	//initialize_led();
 
 	led_status = device_get_binding(LED_STATUS_GPIO_LABEL);
 	if (led_status == NULL) {
@@ -289,7 +338,8 @@ main(void)
 		return;
 	}
 
-	printk("Set up POWER at %s pin %d\n", LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
+	printk("Set up POWER LED at %s pin %d\n", LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
+	printk("System Clock (Hz)    : %i\n", SystemCoreClock);
 	printk("Registers check\n");
 	printk("  RCC->CR            : 0x%08x\n", RCC->CR);
 	printk("  RCC->CFGR          : 0x%08x\n", RCC->CFGR);
@@ -322,16 +372,11 @@ main(void)
 
 		if (dma_complete) {
 			dma_complete = false;
-			printk("DMA transfer complete?\n");
-			ADC1->CR2 &= ~ADC_CR2_ADON;
-			printk("DMA+ADC : %x\n", dma_adc_sample);
-			//printk("test_src\tDMA+ADC\n");
-			//arch_dcache_all(K_CACHE_INVD);
-			//for (int i = 0; i < MY_MAX_SIZE; i++) {
-			//	printk("%x\t\t%x\n",
-			//		(uint32_t)test_src[i],
-			//		(uint32_t)dma_adc_sample[i]);
-			//}
+			//ADC1->CR2 &= ~ADC_CR2_ADON;
+			for (int i = 0; i < QUEUE_BUFFER_LEN; i++) {
+				printk("  %04x : 0x%04x\n", i,
+					(uint32_t)dma_adc_sample[i]);
+			}
 		}
 	}
 }
