@@ -28,9 +28,9 @@
 //#define PRIORITY_ADC	0
 #define PRIORITY_DMA		0
 
-#define QUEUE_BUFFER_LEN	10
+#define DATA_BUFFER_LEN	1000
 
-#define SAMPLE_RATE_LOW		2
+#define SAMPLE_RATE_LOW		1000
 #define SAMPLE_RATE_HIGH	2*SAMPLE_RATE_LOW
 
 /*
@@ -80,7 +80,8 @@ static void match_led_to_button(const struct device *button,
 
 static struct gpio_callback button_cb_data;
 
-static volatile uint16_t dma_adc_sample[QUEUE_BUFFER_LEN];
+static volatile uint16_t data_buffer[2][DATA_BUFFER_LEN];
+static volatile uint32_t *pfull_buffer = NULL;
 static volatile bool dma_complete = false;
 static volatile bool dma_error = false;
 
@@ -89,6 +90,7 @@ enum timer_state_enum {
 	TIMER_ENABLED = 1,
 	TIMER_SOFT_STOP,
 } timer_state = TIMER_DISABLED;
+
 static volatile uint32_t tim_reload;
 
 static void
@@ -109,6 +111,7 @@ DMA2_Stream0_IRQHandler(void *args)
 		ADC1->CR2 &= ~ADC_CR2_ADON;
 		timer_state = TIMER_DISABLED;
 		printk("TIM2 | Stopped\n");
+		sd_close();
 	}
 }
 
@@ -216,13 +219,13 @@ _dma_init(void)
 
 	/* Specify transfer addresses and size for ADC and data */
 	DMA2_Stream0->PAR = (uint32_t)&(ADC1->DR);
-	DMA2_Stream0->M0AR = (uint32_t)dma_adc_sample;
+	DMA2_Stream0->M0AR = (uint32_t)data_buffer;
 
 	/* Do not exceed DMA byte transfer limit */
-	if (QUEUE_BUFFER_LEN > 0xffff) {
+	if (DATA_BUFFER_LEN > 0xffff) {
 		DMA2_Stream0->NDTR = 0xffff;
 	} else {
-		DMA2_Stream0->NDTR = QUEUE_BUFFER_LEN;
+		DMA2_Stream0->NDTR = DATA_BUFFER_LEN;
 	}
 
 	/* XXX Zephyr style IRQ */
@@ -254,6 +257,7 @@ button_pressed(const struct device *dev, struct gpio_callback *cb,
 	printk("[%" PRIu32 "] Button: Engaged\n", k_cycle_get_32());
 	/* Toggle TIM2 state */
 	if (timer_state == TIMER_DISABLED) {
+		sd_open("pwj%05i.bin", FS_O_CREATE | FS_O_WRITE);
 		TIM2->CR1 |= TIM_CR1_CEN;
 		/* Required for SWSTART */
 		ADC1->CR2 |= ADC_CR2_ADON;
@@ -357,6 +361,7 @@ main(void)
 	sd_init();
 
 	gpio_pin_set(led_power, LED_PWR_GPIO_PIN, 1);
+	pfull_buffer = (uint32_t)data_buffer[0];
 	while (1) {
 		match_led_to_button(button, led_status);
 		k_msleep(SLEEP_TIME_MS);
@@ -372,11 +377,7 @@ main(void)
 
 		if (dma_complete) {
 			dma_complete = false;
-			//ADC1->CR2 &= ~ADC_CR2_ADON;
-			for (int i = 0; i < QUEUE_BUFFER_LEN; i++) {
-				printk("  %04x : 0x%04x\n", i,
-					(uint32_t)dma_adc_sample[i]);
-			}
+			sd_save("Hello world", 11);
 		}
 	}
 }

@@ -8,8 +8,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#define MAX_ABSPATH_LEN	16
-#define FS_END_OF_DIR	0
+#define MAX_FILENAME_LEN	12
+#define MAX_ABSPATH_LEN		16
+#define FS_END_OF_DIR		0
 
 enum {
 	SD_DISK_MNT_FAIL = -1,
@@ -29,60 +30,58 @@ static char curfile[16];
 static struct fs_file_t fp;
 static int sd_status = -1;
 
-static int
-sd_open(const char *filename, uint32_t options)
-{
-	int status;
-	int nchar = strlen(disk_mnt) + strlen(filename) + 1;
-	char tmpfile[nchar];
-
-	sprintf(tmpfile, "%s/%s", disk_mnt, filename);
-	
-	fs_file_t_init(&fp);
-	status = fs_open(&fp, tmpfile, options);
-	if (status < 0) {
-		printk("Error opening %s [E:%d]\n", filename, status);
-		return status;
-	}
-	printk("Opening %s\n", tmpfile);
-	strcpy(curfile, tmpfile);
-
-	return EXIT_SUCCESS;
-}
-
-static void
+void
 sd_close(void)
 {
 	fs_close(&fp);
 	memcpy(curfile, 0, MAX_ABSPATH_LEN);
 }
 
-static int 
-sd_io_test(const char *path)
+int
+sd_open(const char *tmpl, unsigned int opt)
 {
 	int status;
-	int bytes;
-	char line[100];
+	int idx = 0;
+	int nchar = strlen(disk_mnt) + MAX_FILENAME_LEN;
+	char fname[MAX_FILENAME_LEN];
+	char tmpfile[nchar];
+	struct fs_dirent entry;
 
-	status = sd_open(path, FS_O_READ);
+	memset(fname, 0, MAX_FILENAME_LEN);
+	memset(tmpfile, 0, nchar);
+
+	while (1) {
+		fs_file_t_init(&fp);
+		sprintf(fname, tmpl, idx);
+		sprintf(tmpfile, "%s/%s", disk_mnt, fname);
+		status = fs_stat(tmpfile, &entry);
+		if (status != -ENOENT) {
+			idx++;
+			continue;
+		} else if ((status < 0) && (status != -ENOENT)) {
+			printk("File system Error [%i]", status);
+			return -1;
+		}
+
+		break;
+	}
+
+	status = fs_open(&fp, tmpfile, opt);
 	if (status < 0) {
+		printk("Error opening %s [E:%d]\n", fname, status);
 		return status;
 	}
 
-	bytes = fs_read(&fp, line, 15);
-	printk("%s [%i]: %s", curfile, bytes, line);
-	sd_close();
+	printk("Opening %s\n", tmpfile);
+	strcpy(curfile, tmpfile);
 
-	status = sd_open("bye.txt", FS_O_CREATE | FS_O_WRITE);
-	if (status < 0) {
-		return status;
-	}
+	return 0;
+}
 
-	bytes = fs_write(&fp, "Goodbye.txt", 8);
-	printk("Wrote %i chars to %s\n", bytes, curfile);
-	sd_close();
-
-	return status;
+void
+sd_save(void *data, unsigned int size)
+{
+	fs_write(&fp, data, size);
 }
 
 void 
@@ -130,7 +129,6 @@ sd_init(void)
 		printk("microSD disk mounted on %s.\n", disk_mnt);
 		/* List contents of microSD for debug output */
 		sd_ls(disk_mnt);
-		sd_io_test("HELLO.TXT");
 	} else {
 		printk("Error mounting microSD disk.\n");
 	}
