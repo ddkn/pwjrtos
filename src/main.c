@@ -23,15 +23,10 @@
 #include <stdbool.h>
 
 #define SLEEP_TIME_MS	1
+#define PRIORITY_DMA	0
 
-/* My Priorities */
-//#define PRIORITY_ADC	0
-#define PRIORITY_DMA		0
-
-#define DATA_BUFFER_LEN	1000
-
-#define SAMPLE_RATE_LOW		1000
-#define SAMPLE_RATE_HIGH	2*SAMPLE_RATE_LOW
+#define DATA_BUFFER_LEN	8192
+#define SAMPLE_RATE_HZ	80000
 
 /*
  * Get button configuration from the devicetree sw0 alias.
@@ -81,9 +76,9 @@ static void match_led_to_button(const struct device *button,
 static struct gpio_callback button_cb_data;
 
 static volatile uint16_t data_buffer[2][DATA_BUFFER_LEN];
-static volatile uint32_t *pfull_buffer = NULL;
 static volatile bool dma_complete = false;
 static volatile bool dma_error = false;
+static uint16_t *pfull_buffer = NULL;
 
 enum timer_state_enum {
 	TIMER_DISABLED = 0,
@@ -99,6 +94,12 @@ DMA2_Stream0_IRQHandler(void *args)
 	if (DMA2->LISR & DMA_LISR_TCIF0) {
 		DMA2->LIFCR |= DMA_LIFCR_CTCIF0;
 		dma_complete = true;
+		/* Double buffer check */
+		if (DMA2_Stream0->CR & DMA_SxCR_CT) {
+			pfull_buffer = (uint16_t*)&data_buffer[0][0];
+		} else {
+			pfull_buffer = (uint16_t*)&data_buffer[1][0];
+		}
 	}
 
 	if (DMA2->LISR & DMA_LISR_TEIF0) {
@@ -180,7 +181,7 @@ _timer_init(void)
 	/* TIM2 is a 32-bit timer, but prescaler is 16-bits wide
 	 * This implies timer range is tim_clk_freq/0xffff -> tim_clk_freq
 	 */
-	tim_reload = tim_clk_freq / (tim_prescaler * SAMPLE_RATE_LOW);
+	tim_reload = tim_clk_freq / (tim_prescaler * SAMPLE_RATE_HZ);
 	/* WARN Adjust register by -1 since they count from zero */
 	TIM2->PSC = tim_prescaler - 1;
 	TIM2->ARR = tim_reload - 1;
@@ -212,14 +213,16 @@ _dma_init(void)
 	/* Reset assumes periph. to memory, perih. no inc., DMA controls flow */
 	const uint32_t cr = (DMA_SxCR_MINC 	| /* Memory inc. */
 			     //DMA_SxCR_PINC 	|
-			     DMA_SxCR_CIRC 		| /* Circular Buffer */
+			     DMA_SxCR_CIRC 	| /* Circular Buffer */
+			     DMA_SxCR_DBM 	| /* Double buffer */
 			     DMA_SxCR_MSIZE_0 	| /* 16-bit */
 			     DMA_SxCR_PSIZE_0 	| /* 16-bit */
 			     DMA_SxCR_PL_1);	  /* Priority high */
 
 	/* Specify transfer addresses and size for ADC and data */
 	DMA2_Stream0->PAR = (uint32_t)&(ADC1->DR);
-	DMA2_Stream0->M0AR = (uint32_t)data_buffer;
+	DMA2_Stream0->M0AR = (uint32_t)&data_buffer[0][0];
+	DMA2_Stream0->M1AR = (uint32_t)&data_buffer[1][0];
 
 	/* Do not exceed DMA byte transfer limit */
 	if (DATA_BUFFER_LEN > 0xffff) {
@@ -254,6 +257,7 @@ void
 button_pressed(const struct device *dev, struct gpio_callback *cb,
 	uint32_t pins)
 {
+
 	printk("[%" PRIu32 "] Button: Engaged\n", k_cycle_get_32());
 	/* Toggle TIM2 state */
 	if (timer_state == TIMER_DISABLED) {
@@ -284,6 +288,7 @@ main(void)
 	const struct device *button;
 	const struct device *led_status;
 	const struct device *led_power;
+	size_t buf_byte_size = sizeof(uint16_t)*DATA_BUFFER_LEN;
 	int ret;
 
 	button = device_get_binding(SW0_GPIO_LABEL);
@@ -361,7 +366,6 @@ main(void)
 	sd_init();
 
 	gpio_pin_set(led_power, LED_PWR_GPIO_PIN, 1);
-	pfull_buffer = (uint32_t)data_buffer[0];
 	while (1) {
 		match_led_to_button(button, led_status);
 		k_msleep(SLEEP_TIME_MS);
@@ -377,7 +381,7 @@ main(void)
 
 		if (dma_complete) {
 			dma_complete = false;
-			sd_save("Hello world", 11);
+			sd_save((uint8_t*)pfull_buffer, buf_byte_size);
 		}
 	}
 }

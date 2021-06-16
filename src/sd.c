@@ -79,7 +79,7 @@ sd_open(const char *tmpl, unsigned int opt)
 }
 
 void
-sd_save(void *data, unsigned int size)
+sd_save(void *data, size_t size)
 {
 	fs_write(&fp, data, size);
 }
