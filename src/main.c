@@ -111,7 +111,7 @@ DMA2_Stream0_IRQHandler(void *args)
 		TIM2->CR1 &= ~TIM_CR1_CEN;
 		ADC1->CR2 &= ~ADC_CR2_ADON;
 		timer_state = TIMER_DISABLED;
-		printk("TIM2 | Stopped\n");
+		LOG_DBG("TIM2 | Stopped\n");
 		sd_close();
 	}
 }
@@ -164,7 +164,9 @@ _timer_init(void)
 	uint32_t tmpreg;
 	uint32_t apb1_ppre1 = (RCC->CFGR & RCC_CFGR_PPRE1) >> RCC_CFGR_PPRE1_Pos;
 	uint32_t tim_clk_freq = SystemCoreClock >> APBPrescTable[apb1_ppre1];
-	/* tim_clk_freq @ 36 MHz, for simplicity set timer update every 1 MHz  */
+	/* tim_clk_freq @ 36 MHz in STM32F767ZI default state.
+	 * for simplicity set timer update every 1 MHz
+	 */
 	uint32_t tim_prescaler = 36;
 
 	printk("TIM | PPRE1 : 0x%02x\n", apb1_ppre1);
@@ -212,7 +214,6 @@ _dma_init(void)
 	/* Configuration transfer */
 	/* Reset assumes periph. to memory, perih. no inc., DMA controls flow */
 	const uint32_t cr = (DMA_SxCR_MINC 	| /* Memory inc. */
-			     //DMA_SxCR_PINC 	|
 			     DMA_SxCR_CIRC 	| /* Circular Buffer */
 			     DMA_SxCR_DBM 	| /* Double buffer */
 			     DMA_SxCR_MSIZE_0 	| /* 16-bit */
@@ -258,7 +259,7 @@ button_pressed(const struct device *dev, struct gpio_callback *cb,
 	uint32_t pins)
 {
 
-	printk("[%" PRIu32 "] Button: Engaged\n", k_cycle_get_32());
+	LOG_DBG("[%" PRIu32 "] Button pressed\n", k_cycle_get_32());
 	/* Toggle TIM2 state */
 	if (timer_state == TIMER_DISABLED) {
 		sd_open("pwj%05i.bin", FS_O_CREATE | FS_O_WRITE);
@@ -266,10 +267,10 @@ button_pressed(const struct device *dev, struct gpio_callback *cb,
 		/* Required for SWSTART */
 		ADC1->CR2 |= ADC_CR2_ADON;
 		timer_state = TIMER_ENABLED;
-		printk("TIM2 | Starting\n");
+		LOG_DBG("TIM2 | Starting\n");
 	} else {
 		timer_state = TIMER_SOFT_STOP;
-		printk("TIM2 | Stopping\n");
+		LOG_DBG("TIM2 | Stopping\n");
 	}
 }
 
@@ -279,17 +280,17 @@ main(void)
 	/* Required for STM32F767, breaks DCache breaks DMA on Zephyr */
 	 SCB_DisableDCache();
 
-	_gpio_init();
-	_adc_pre_init();
-	_timer_init();
-	_dma_init();
-	_adc_post_init();
-
 	const struct device *button;
 	const struct device *led_status;
 	const struct device *led_power;
 	size_t buf_byte_size = sizeof(uint16_t)*DATA_BUFFER_LEN;
 	int ret;
+
+	_gpio_init();
+	_adc_pre_init();
+	_timer_init();
+	_dma_init();
+	_adc_post_init();
 
 	button = device_get_binding(SW0_GPIO_LABEL);
 	if (button == NULL) {
@@ -347,21 +348,19 @@ main(void)
 		return;
 	}
 
-	printk("Set up POWER LED at %s pin %d\n", LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
-	printk("System Clock (Hz)    : %i\n", SystemCoreClock);
-	printk("Registers check\n");
-	printk("  RCC->CR            : 0x%08x\n", RCC->CR);
-	printk("  RCC->CFGR          : 0x%08x\n", RCC->CFGR);
-	printk("  RCC->PLLCFGR       : 0x%08x\n", RCC->PLLCFGR);
-	printk("  RCC->AHB1ENR       : 0x%08x\n", RCC->AHB1ENR);
-	printk("  DMA2_Stream0->CR   : 0x%08x\n", DMA2_Stream0->CR);
-	printk("  DMA2_Stream0->NDTR : 0x%08x\n", DMA2_Stream0->NDTR);
-	printk("  DMA2_Stream0->PAR  : 0x%08x\n", DMA2_Stream0->PAR);
-	printk("  DMA2_Stream0->MOAR : 0x%08x\n", DMA2_Stream0->M0AR);
-	printk("  DMA2_Stream0->FCR  : 0x%08x\n", DMA2_Stream0->FCR);
+	LOG_DBG("POWER LED @ %s pin %d\n", LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
+	LOG_DBG("System Clock (Hz)    : %i\n", SystemCoreClock);
+	LOG_DBG("RCC->CR            : 0x%08x\n", RCC->CR);
+	LOG_DBG("RCC->CFGR          : 0x%08x\n", RCC->CFGR);
+	LOG_DBG("RCC->PLLCFGR       : 0x%08x\n", RCC->PLLCFGR);
+	LOG_DBG("RCC->AHB1ENR       : 0x%08x\n", RCC->AHB1ENR);
+	LOG_DBG("DMA2_Stream0->CR   : 0x%08x\n", DMA2_Stream0->CR);
+	LOG_DBG("DMA2_Stream0->NDTR : 0x%08x\n", DMA2_Stream0->NDTR);
+	LOG_DBG("DMA2_Stream0->PAR  : 0x%08x\n", DMA2_Stream0->PAR);
+	LOG_DBG("DMA2_Stream0->MOAR : 0x%08x\n", DMA2_Stream0->M0AR);
+	LOG_DBG("DMA2_Stream0->FCR  : 0x%08x\n", DMA2_Stream0->FCR);
 
 	printk("PWJ Strain Logger Ready\n");
-	printk("Press the button\n");
 
 	sd_init();
 
