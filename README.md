@@ -11,16 +11,25 @@ operates at 20 kHz or 40 kHz. The accompanying daughter board to the Nucleo
 STM32F767ZI is located in the repository
 [Nanomagnetics Lab](https://github.com/nanomagneticslab).
 
+## Requirements
+
+You are required to have the PWJStrainLogger daughter board which includes a
+microSD card reader.
+
 ## Installation
 
 Please see the [Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/getting_started/index.html)
 to set up the build system. For brevity I will include the basic steps.
 
+For ZephyrRTOS v2.7.0 (pwjrtos is built against this), we require cmake >= 3.20.
+
 ```
 pip install west
-west init ~/pwjrtos
+west init ~/zephyr
 west update
 west zephyr-export
+cd ~/zephyr/zephyr
+git checkout v2.7.0
 pip3 install -r ~/pwjrtos/zephyr/scripts/requirements
 ```
 
@@ -33,29 +42,24 @@ sudo dnf install arm-none-eabi-newlib # Fedora/Redhat
 sudo port install arm-none-eabi-gcc   # macOS by MacPorts
 ```
 
-Then you need to add the following *aliases* to your shells rc file,
+Then you need to add the following *exports* to your shells rc file,
 
 ```
-alias ZEPHYR_TOOLCHAIN_VARIANT=cross-compile
-alias CROSS_COMPILE=/usr/local/bin/arm-none-eabi- # macOS via MacPorts
-alias CROSS_COMPILE=/usr/bin/arm-none-eabi-       # Linux
+export ZEPHYR_TOOLCHAIN_VARIANT=cross-compile
+export CROSS_COMPILE=/usr/local/bin/arm-none-eabi- # macOS via MacPorts
+export CROSS_COMPILE=/usr/bin/arm-none-eabi-       # Linux
 ```
 
 You should be able to build the blinky example to ensure everything works.
 
 ```
-cd ~/pwjrtos/zephyr
+cd ~/zephyr/zephyr
 west build -p auto -b <your-board-name> samples/basic/blinky
 ```
 
-## Requirements
-
-You are required to have the PWJStrainLogger daughter board which includes a
-microSD card reader.
-
 ## Devicetree details
 
-The device tree is very bassic as we will only need two buttons to interface with.
+The device tree is very basic as we will only need two buttons to interface with.
 The ADC is designed to run manually outside of the Zephyr RTOS API because of the
 lack of continuous mode throught the DMA channel. As shown, the ``sw0`` devicetree
 alias must point to a child node of a node
@@ -66,9 +70,9 @@ This sample can be built for the Nucleo STM32F767ZI in this example we will
 build it for the nucleo_f767zi board:
 
 ```
-cd ~/pwjrtos/zephyr
-git clone https://github.com/nanomagneticslab/pwjrtos.git app
-west build -p auto -b boards/nucleo_f767zi app
+cd ~/zephyr/zephyr
+git clone https://github.com/nanomagneticslab/pwjrtos.git
+west build -p auto -b boards/nucleo_f767zi pwjrtos
 west flash
 ```
 
