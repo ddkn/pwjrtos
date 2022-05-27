@@ -25,8 +25,8 @@
 #define SLEEP_TIME_MS	1
 #define PRIORITY_DMA	0
 
-#define DATA_BUFFER_LEN	8192
-#define SAMPLE_RATE_HZ	80000
+#define DATA_BUFFER_LEN	2 << 13
+#define SAMPLE_RATE_HZ	180000
 
 /*
  * Get button configuration from the devicetree sw0 alias.
@@ -167,13 +167,13 @@ _timer_init(void)
 	/* tim_clk_freq @ 36 MHz in STM32F767ZI default state.
 	 * for simplicity set timer update every 1 MHz
 	 */
-	uint32_t tim_prescaler = 36;
+	uint32_t tim_prescaler = 1;
 
-	printk("TIM | PPRE1 : 0x%02x\n", apb1_ppre1);
-	printk("TIM | CLK   : %i\n", tim_clk_freq);
 	if (apb1_ppre1 != RCC_CFGR_PPRE1_DIV1) {
 		tim_clk_freq *= 2;
 	}
+	printk("TIM | PPRE1           : 0x%02x\n", apb1_ppre1);
+	printk("TIM | CLK             : %i\n", tim_clk_freq);
 
 	/* Enable TIM2 peripheral clock, wait 2 clock cycles before read */
 	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
