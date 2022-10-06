@@ -72,7 +72,7 @@ build it for the nucleo_f767zi board:
 ```
 cd ~/zephyr/zephyr
 git clone https://github.com/nanomagneticslab/pwjrtos.git
-west build -p auto -b boards/nucleo_f767zi pwjrtos
+west build -p auto -b nucleo_f767zi pwjrtos
 west flash
 ```
 
