@@ -65,13 +65,12 @@ enum leds_available {POWER, STATUS};
 #define SW0_GPIO_FLAGS	0
 #endif
 
+#define TIMEOUT_DEFAULT_MS	1000
+#define TIMEOUT_ADC_MS		500
+#define TIMEOUT_DMA_MS		100
+
 /* SD card related definitions */
 LOG_MODULE_REGISTER(main);
-
-/* LED helpers, which use the led0 devicetree alias if it's available. */
-//static const struct device *initialize_led(const struct device *led[LED_NUM]);
-static void match_led_to_button(const struct device *button,
-				const struct device *led);
 
 static struct gpio_callback button_cb_data;
 
@@ -79,6 +78,15 @@ static volatile uint16_t data_buffer[2][DATA_BUFFER_LEN];
 static volatile bool dma_complete = false;
 static volatile bool dma_error = false;
 static uint16_t *pfull_buffer = NULL;
+
+static struct k_timer status_timer;
+static const struct device *led_status;
+enum status_state_enum {
+	STATUS_IDLE = 0,
+	STATUS_DATA_ACQ,
+	STATUS_ERROR_ADC = -1,
+	STATUS_ERROR_DMA = -2,
+} status_state = STATUS_IDLE;
 
 enum timer_state_enum {
 	TIMER_DISABLED = 0,
@@ -258,10 +266,15 @@ void
 button_pressed(const struct device *dev, struct gpio_callback *cb,
 	uint32_t pins)
 {
-
+	uint16_t status_timeout = TIMEOUT_DEFAULT_MS;
 	LOG_DBG("[%" PRIu32 "] Button pressed\n", k_cycle_get_32());
+
 	/* Toggle TIM2 state */
 	if (timer_state == TIMER_DISABLED) {
+		status_state = STATUS_DATA_ACQ;
+		/* Turn on LED solid to indicate data collection */
+		gpio_pin_set(led_status, LED_STATUS_GPIO_PIN, 1);
+		k_timer_stop(&status_timer);
 		sd_open("pwj%05i.bin", FS_O_CREATE | FS_O_WRITE);
 		TIM2->CR1 |= TIM_CR1_CEN;
 		/* Required for SWSTART */
@@ -269,9 +282,19 @@ button_pressed(const struct device *dev, struct gpio_callback *cb,
 		timer_state = TIMER_ENABLED;
 		LOG_DBG("TIM2 | Starting\n");
 	} else {
+		status_state = STATUS_IDLE;
+		k_timer_start(&status_timer, K_MSEC(status_timeout), K_MSEC(status_timeout));
 		timer_state = TIMER_SOFT_STOP;
 		LOG_DBG("TIM2 | Stopping\n");
 	}
+}
+
+void
+status_led_handler(struct k_timer *timer_id)
+{
+	bool led_state;
+	led_state = gpio_pin_get(led_status, LED_STATUS_GPIO_PIN);
+	gpio_pin_set(led_status, LED_STATUS_GPIO_PIN, !led_state);
 }
 
 void
@@ -281,10 +304,10 @@ main(void)
 	 SCB_DisableDCache();
 
 	const struct device *button;
-	const struct device *led_status;
 	const struct device *led_power;
 	size_t buf_byte_size = sizeof(uint16_t)*DATA_BUFFER_LEN;
 	int ret;
+	uint16_t status_timeout = TIMEOUT_DEFAULT_MS;
 
 	_gpio_init();
 	_adc_pre_init();
@@ -343,7 +366,7 @@ main(void)
 
 	ret = gpio_pin_configure(led_power, LED_PWR_GPIO_PIN, LED_PWR_GPIO_FLAGS);
 	if (ret != 0) {
-		printk("Error %d: failed to configure POWER LED device %s pin %d\n",
+		printk("Error %d: failed to configure POWER LED d<M-PageUp>evice %s pin %d\n",
 		       ret, LED_PWR_GPIO_LABEL, LED_PWR_GPIO_PIN);
 		return;
 	}
@@ -365,16 +388,28 @@ main(void)
 	sd_init();
 
 	gpio_pin_set(led_power, LED_PWR_GPIO_PIN, 1);
+	gpio_pin_set(led_status, LED_STATUS_GPIO_PIN, 0);
+
+	/* Setup Status LED */
+	k_timer_init(&status_timer, status_led_handler, NULL);
+	k_timer_start(&status_timer, K_MSEC(status_timeout), K_MSEC(status_timeout));
 	while (1) {
-		match_led_to_button(button, led_status);
 		k_msleep(SLEEP_TIME_MS);
 		if (ADC1->SR & ADC_SR_OVR) {
 			ADC1->SR &= ~ADC_SR_OVR;
+			status_timeout = TIMEOUT_ADC_MS;
+			k_timer_stop(&status_timer);
+			k_timer_start(&status_timer, K_MSEC(status_timeout), K_MSEC(status_timeout));
+			status_state = STATUS_ERROR_ADC;
 			printk("ADC Error!\n");
 		}
 
 		if (dma_error) {
 			dma_error = false;
+			status_timeout = TIMEOUT_DMA_MS;
+			k_timer_stop(&status_timer);
+			k_timer_start(&status_timer, K_MSEC(status_timeout), K_MSEC(status_timeout));
+			status_state = STATUS_ERROR_DMA;
 			printk("DMA Error!\n");
 		}
 
@@ -385,23 +420,3 @@ main(void)
 	}
 }
 
-/*
- * The led0 devicetree alias is optional. If present, we'll use it
- * to turn on the LED whenever the button is pressed.
- */
-#ifdef LED_STATUS_GPIO_LABEL
-static void
-match_led_to_button(const struct device *button, const struct device *led)
-{
-	bool val;
-
-	val = gpio_pin_get(button, SW0_GPIO_PIN);
-	gpio_pin_set(led, LED_STATUS_GPIO_PIN, val);
-}
-#else  /* !defined(LED_STATUS_GPIO_LABEL) */
-static void
-match_led_to_button(const struct device *button, const struct device *led)
-{
-	return;
-}
-#endif	/* LED_STATUS_GPIO_LABEL */
