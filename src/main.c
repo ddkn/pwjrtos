@@ -91,9 +91,12 @@ enum leds_available {POWER, STATUS};
 #define SW0_GPIO_FLAGS	0
 #endif
 
-#define TIMEOUT_DEFAULT_MS	1000
-#define TIMEOUT_ADC_MS		500
-#define TIMEOUT_DMA_MS		100
+enum timeout_flag {
+	TIMEOUT_DEFAULT_MS = 1000,
+	TIMEOUT_ERROR_ADC  = 500,
+	TIMEOUT_ERROR_DMA  = 100,
+	TIMEOUT_ERROR_SD   = 50,
+};
 
 /* SD card related definitions */
 LOG_MODULE_REGISTER(main);
@@ -333,6 +336,7 @@ main(void)
 	const struct device *led_power;
 	size_t buf_byte_size = sizeof(uint16_t)*DATA_BUFFER_LEN;
 	int ret;
+	int sd_status;
 	uint16_t status_timeout = TIMEOUT_DEFAULT_MS;
 
 	_gpio_init();
@@ -411,7 +415,10 @@ main(void)
 
 	printk("PWJ Strain Logger Ready\n");
 
-	sd_init();
+	sd_status = sd_init();
+	if (sd_status == SD_DISK_MNT_FAIL) {
+		status_timeout = TIMEOUT_ERROR_SD;
+	}
 
 	gpio_pin_set(led_power, LED_PWR_GPIO_PIN, 1);
 	gpio_pin_set(led_status, LED_STATUS_GPIO_PIN, 0);
@@ -420,10 +427,9 @@ main(void)
 	k_timer_init(&status_timer, status_led_handler, NULL);
 	k_timer_start(&status_timer, K_MSEC(status_timeout), K_MSEC(status_timeout));
 	while (1) {
-		k_msleep(SLEEP_TIME_MS);
 		if (ADC1->SR & ADC_SR_OVR) {
 			ADC1->SR &= ~ADC_SR_OVR;
-			status_timeout = TIMEOUT_ADC_MS;
+			status_timeout = TIMEOUT_ERROR_ADC;
 			k_timer_stop(&status_timer);
 			k_timer_start(&status_timer, K_MSEC(status_timeout), K_MSEC(status_timeout));
 			status_state = STATUS_ERROR_ADC;
@@ -432,7 +438,7 @@ main(void)
 
 		if (dma_error) {
 			dma_error = false;
-			status_timeout = TIMEOUT_DMA_MS;
+			status_timeout = TIMEOUT_ERROR_DMA;
 			k_timer_stop(&status_timer);
 			k_timer_start(&status_timer, K_MSEC(status_timeout), K_MSEC(status_timeout));
 			status_state = STATUS_ERROR_DMA;

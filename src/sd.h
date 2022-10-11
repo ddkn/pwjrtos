@@ -33,7 +33,12 @@
 
 #include <stddef.h>
 
-void sd_init();
+enum {
+	SD_DISK_MNT_FAIL = -1,
+	SD_DISK_MNT_OK = 0,
+};
+
+int  sd_init();
 int  sd_ls(const char *path);
 int  sd_open(const char *tmpl, unsigned int opt);
 void sd_close();

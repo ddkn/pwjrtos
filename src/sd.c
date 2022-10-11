@@ -42,10 +42,6 @@
 #define MAX_ABSPATH_LEN		16
 #define FS_END_OF_DIR		0
 
-enum {
-	SD_DISK_MNT_FAIL = -1,
-};
-
 LOG_MODULE_REGISTER(sd);
 
 static const char *disk_mnt = "/SD:";
@@ -114,7 +110,7 @@ sd_save(void *data, size_t size)
 	fs_write(&fp, data, size);
 }
 
-void 
+int
 sd_init(void)
 {
 	static const char *disk_pdrv = "SD";
@@ -158,7 +154,9 @@ sd_init(void)
 		sd_ls(disk_mnt);
 	} else {
 		printk("Error mounting microSD disk.\n");
+		return SD_DISK_MNT_FAIL;
 	}
+	return SD_DISK_MNT_OK;
 }
 
 int 
