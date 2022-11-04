@@ -7,9 +7,19 @@
 		};
 	};
 
+
+	gpio_keys {
+		compatible = "gpio-keys";
+		pwj_button: button_1 {
+			label = "PWJ Button";
+			gpios = <&gpioe 0 GPIO_ACTIVE_LOW>;
+		};
+	};
+
 	aliases {
 		ledstatus = &green_led;
 		ledpower = &power_led;
+		sw1 = &pwj_button;
 	};
 };
 

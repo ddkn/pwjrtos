@@ -61,6 +61,7 @@ sd_close(void)
 {
 	fs_close(&fp);
 	memcpy(curfile, 0, MAX_ABSPATH_LEN);
+	printk("Closing file\n");
 }
 
 int
@@ -98,7 +99,7 @@ sd_open(const char *tmpl, unsigned int opt)
 		return status;
 	}
 
-	printk("Opening %s\n", tmpfile);
+	printk("Opening file %s\n", tmpfile);
 	strcpy(curfile, tmpfile);
 
 	return 0;

@@ -63,6 +63,7 @@
 #define LED_PWR_NODE	DT_ALIAS(ledpower)
 #define LED_STATUS_NODE	DT_ALIAS(ledstatus)
 #define SW0_NODE	DT_ALIAS(sw0)
+#define SW1_NODE	DT_ALIAS(sw1)
 
 #if DT_NODE_HAS_STATUS(LED_PWR_NODE, okay) && DT_NODE_HAS_PROP(LED_PWR_NODE, gpios)
 #define LED_PWR_GPIO_LABEL	DT_GPIO_LABEL(LED_PWR_NODE, gpios)
@@ -79,7 +80,6 @@
 #define LED_NUM 2
 enum leds_available {POWER, STATUS};
 
-
 #if DT_NODE_HAS_STATUS(SW0_NODE, okay)
 #define SW0_GPIO_LABEL	DT_GPIO_LABEL(SW0_NODE, gpios)
 #define SW0_GPIO_PIN	DT_GPIO_PIN(SW0_NODE, gpios)
@@ -89,6 +89,17 @@ enum leds_available {POWER, STATUS};
 #define SW0_GPIO_LABEL	""
 #define SW0_GPIO_PIN	0
 #define SW0_GPIO_FLAGS	0
+#endif
+
+#if DT_NODE_HAS_STATUS(SW1_NODE, okay)
+#define SW1_GPIO_LABEL	DT_GPIO_LABEL(SW1_NODE, gpios)
+#define SW1_GPIO_PIN	DT_GPIO_PIN(SW1_NODE, gpios)
+#define SW1_GPIO_FLAGS	(GPIO_INPUT | DT_GPIO_FLAGS(SW1_NODE, gpios))
+#else
+#error "Unsupported board: sw1 devicetree alias is not defined"
+#define SW1_GPIO_LABEL	""
+#define SW1_GPIO_PIN	0
+#define SW1_GPIO_FLAGS	0
 #endif
 
 enum timeout_flag {
@@ -209,8 +220,8 @@ _timer_init(void)
 	if (apb1_ppre1 != RCC_CFGR_PPRE1_DIV1) {
 		tim_clk_freq *= 2;
 	}
-	printk("TIM | PPRE1           : 0x%02x\n", apb1_ppre1);
-	printk("TIM | CLK             : %i\n", tim_clk_freq);
+	LOG_DBG("TIM | PPRE1           : 0x%02x\n", apb1_ppre1);
+	LOG_DBG("TIM | CLK             : %i\n", tim_clk_freq);
 
 	/* Enable TIM2 peripheral clock, wait 2 clock cycles before read */
 	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
@@ -332,7 +343,8 @@ main(void)
 	/* Required for STM32F767, breaks DCache breaks DMA on Zephyr */
 	 SCB_DisableDCache();
 
-	const struct device *button;
+	const struct device *button_stm32;
+	const struct device *button_pwj;
 	const struct device *led_power;
 	size_t buf_byte_size = sizeof(uint16_t)*DATA_BUFFER_LEN;
 	int ret;
@@ -345,20 +357,21 @@ main(void)
 	_dma_init();
 	_adc_post_init();
 
-	button = device_get_binding(SW0_GPIO_LABEL);
-	if (button == NULL) {
+	/* Button on STM32 board */
+	button_stm32 = device_get_binding(SW0_GPIO_LABEL);
+	if (button_stm32 == NULL) {
 		printk("Error: didn't find %s device\n", SW0_GPIO_LABEL);
 		return;
 	}
 
-	ret = gpio_pin_configure(button, SW0_GPIO_PIN, SW0_GPIO_FLAGS);
+	ret = gpio_pin_configure(button_stm32, SW0_GPIO_PIN, SW0_GPIO_FLAGS);
 	if (ret != 0) {
 		printk("Error %d: failed to configure %s pin %d\n",
 		       ret, SW0_GPIO_LABEL, SW0_GPIO_PIN);
 		return;
 	}
 
-	ret = gpio_pin_interrupt_configure(button,
+	ret = gpio_pin_interrupt_configure(button_stm32,
 					   SW0_GPIO_PIN,
 					   GPIO_INT_EDGE_TO_ACTIVE);
 	if (ret != 0) {
@@ -368,9 +381,37 @@ main(void)
 	}
 
 	gpio_init_callback(&button_cb_data, button_pressed, BIT(SW0_GPIO_PIN));
-	gpio_add_callback(button, &button_cb_data);
-	printk("Set up button at %s pin %d\n", SW0_GPIO_LABEL, SW0_GPIO_PIN);
+	gpio_add_callback(button_stm32, &button_cb_data);
+	printk("Set up button_stm32 at %s pin %d\n", SW0_GPIO_LABEL, SW0_GPIO_PIN);
 
+	/* Button on PWJ signal board */
+	button_pwj = device_get_binding(SW1_GPIO_LABEL);
+	if (button_pwj == NULL) {
+		printk("Error: didn't find %s device\n", SW1_GPIO_LABEL);
+		return;
+	}
+
+	ret = gpio_pin_configure(button_pwj, SW1_GPIO_PIN, SW1_GPIO_FLAGS);
+	if (ret != 0) {
+		printk("Error %d: failed to configure %s pin %d\n",
+		       ret, SW1_GPIO_LABEL, SW1_GPIO_PIN);
+		return;
+	}
+
+	ret = gpio_pin_interrupt_configure(button_pwj,
+					   SW1_GPIO_PIN,
+					   GPIO_INT_EDGE_TO_ACTIVE);
+	if (ret != 0) {
+		printk("Error %d: failed to configure interrupt on %s pin %d\n",
+			ret, SW1_GPIO_LABEL, SW1_GPIO_PIN);
+		return;
+	}
+
+	gpio_init_callback(&button_cb_data, button_pressed, BIT(SW1_GPIO_PIN));
+	gpio_add_callback(button_pwj, &button_cb_data);
+	printk("Set up button_pwj at %s pin %d\n", SW1_GPIO_LABEL, SW1_GPIO_PIN);
+
+	/* LEDs */
 	led_status = device_get_binding(LED_STATUS_GPIO_LABEL);
 	if (led_status == NULL) {
 		printk("Didn't find STATUS LED device %s\n", LED_STATUS_GPIO_LABEL);
