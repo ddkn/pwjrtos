@@ -52,7 +52,8 @@
 #define PRIORITY_DMA	0
 
 #define DATA_BUFFER_LEN	2 << 13
-#define SAMPLE_RATE_HZ	180000
+/* Sample rate should not be a multiple of 40 kHz */
+#define SAMPLE_RATE_HZ	169000
 
 /*
  * Get button configuration from the devicetree sw0 alias.
